@@ -5,18 +5,22 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/tls"
+	// "encoding/gob"
 	"errors"
 	"io"
 	"log"
 	"net/url"
 	"os"
+	// "sync"
+	"time"
 
 	"github.com/94peter/mqtt/config"
 	"github.com/94peter/mqtt/trans"
 
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/autopaho/queue"
-	"github.com/eclipse/paho.golang/autopaho/queue/file"
+	// "github.com/eclipse/paho.golang/autopaho/queue/file"
+	// "github.com/eclipse/paho.golang/packets"
 	"github.com/eclipse/paho.golang/paho"
 	"github.com/eclipse/paho.golang/paho/session"
 	"github.com/eclipse/paho.golang/paho/session/state"
@@ -105,12 +109,19 @@ func (serv *mqttServ) Run(ctx context.Context) {
 	cfg := serv.config
 	var q queue.Queue
 	var session session.SessionManager
+	// var publishStarted bool
+	// var publishMutex sync.Mutex
+
 	if cfg.QueuePath != "" {
-		q, err = file.New(cfg.QueuePath, "queue", ".msg")
+		// q, err = file.New(cfg.QueuePath, "queue", ".msg")
+		// if err != nil {
+		// 	panic(err)
+		// }
+		q, err = NewThrottledQueue(cfg.QueuePath, time.Minute)
 		if err != nil {
 			panic(err)
-
 		}
+
 		if cfg.Store != nil {
 			switch cfg.Store.Type {
 			case "memory":
@@ -154,6 +165,14 @@ func (serv *mqttServ) Run(ctx context.Context) {
 		// (60 = 1 minute, 3600 = 1 hour, 86400 = one day, 0xFFFFFFFE = 136 years, 0xFFFFFFFF = don't expire)
 		SessionExpiryInterval: 60,
 		OnConnectionUp: func(cm *autopaho.ConnectionManager, connAck *paho.Connack) {
+			// publishMutex.Lock()
+			// if publishStarted {
+			// 	publishMutex.Unlock()
+			// 	return
+			// }
+			// publishStarted = true
+			// publishMutex.Unlock()
+
 			serv.println("mqtt connection up")
 			serv.isConnected = true
 			// Subscribing in the OnConnectionUp callback is recommended (ensures the subscription is reestablished if
@@ -161,6 +180,69 @@ func (serv *mqttServ) Run(ctx context.Context) {
 			if len(cfg.Topics) == 0 {
 				return
 			}
+
+			// go func() {
+			// 	ticker := time.NewTicker(time.Minute)
+			// 	defer ticker.Stop()
+
+			// 	for {
+			// 		entry, err := q.Peek()
+			// 		if err != nil {
+			// 			if errors.Is(err, queue.ErrEmpty) {
+			// 				break
+			// 			}
+			// 			serv.printf("error peeking queue: %s\n", err)
+			// 			continue
+			// 		}
+
+			// 		ioReader, err := entry.Reader()
+			// 		if err != nil {
+			// 			serv.printf("error get entry reader: %s\n", err)
+			// 			continue
+			// 		}
+
+			// 		// pkt, err := packets.ReadPacket(ioReader)
+			// 		// if err != nil {
+			// 		// 	serv.printf("error reading queue item: %s\n", err)
+			// 		// 	continue
+			// 		// }
+
+			// 		// var b bytes.Buffer
+			// 		// err = pkt.Content.Unpack(&b)
+			// 		// if err != nil {
+			// 		// 	serv.printf("error reading queue item: %s\n", err)
+			// 		// 	continue
+			// 		// }
+			// 		var tempP packets.Publish
+			// 		dec := gob.NewDecoder(ioReader)
+			// 		err = dec.Decode(&tempP)
+			// 		if err != nil {
+			// 			serv.printf("error reading queue item: %s\n", err)
+			// 			continue
+			// 		}
+
+			// 		err = serv.Publish(ctx, tempP.Topic, tempP.QoS, tempP.Payload)
+			// 		if err != nil {
+			// 			serv.printf("error publishing queue item: %s\n", err)
+			// 			continue
+			// 		}
+
+			// 		err = entry.Remove()
+			// 		if err != nil {
+			// 			if errors.Is(err, queue.ErrEmpty) {
+			// 				break
+			// 			}
+			// 			serv.printf("error removing queue item: %s\n", err)
+			// 		}
+
+			// 		<- ticker.C
+			// 	}
+			// 	serv.println("mqtt done of re-publish item in queue")
+
+			// 	publishMutex.Lock()
+			// 	publishStarted = false
+			// 	publishMutex.Unlock()
+
 			subOpts := make([]paho.SubscribeOptions, len(cfg.Topics))
 			for i, t := range cfg.Topics {
 				subOpts[i] = paho.SubscribeOptions{Topic: t, QoS: cfg.Qos}
@@ -171,6 +253,7 @@ func (serv *mqttServ) Run(ctx context.Context) {
 				serv.printf("failed to subscribe (%s). This is likely to mean no messages will be received.", err)
 			}
 			serv.println("mqtt subscription made")
+			// } ()
 		},
 		OnConnectError: func(err error) { serv.printf("error whilst attempting connection: %s\n", err) },
 		ClientConfig: paho.ClientConfig{
@@ -187,7 +270,8 @@ func (serv *mqttServ) Run(ctx context.Context) {
 					}
 					serv.h.handle(&pr)
 					return true, nil
-				}},
+				},
+			},
 			OnClientError: func(err error) { serv.printf("client error: %s\n", err) },
 			OnServerDisconnect: func(d *paho.Disconnect) {
 				serv.isConnected = false
@@ -257,7 +341,6 @@ func (serv *mqttServ) Publish(ctx context.Context, topic string, qos byte, paylo
 		Topic:   topic,
 		Payload: payload,
 	})
-
 	if err != nil {
 		serv.printf("error publishing: %s\n", err)
 		return err
@@ -292,7 +375,7 @@ func (serv *mqttServ) PublishViaQueue(ctx context.Context, topic string, qos byt
 		serv.printf("error publishing: %s\n", err)
 		return err
 	} else {
-		serv.printf("sent topic [%s] message: %s\n", topic, payload)
+		serv.printf("(queue) sent topic [%s] message: %s\n", topic, payload)
 	}
 	return nil
 }

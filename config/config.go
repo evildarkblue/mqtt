@@ -34,6 +34,8 @@ const (
 	envStorePath   = "MQTT_Store_Path"
 	envStoreEnable = "MQTT_Store_Enable"
 
+	envThrottledQueueDuration = "MQTT_ThrottledQueue_Duration"
+
 	envDebug = "MQTT_Debug" // if "true" then the libraries will be instructed to print debug info
 )
 
@@ -62,6 +64,7 @@ type Config struct {
 
 	QueuePath  string
 	EnableGzip bool
+	ThrottledQueueDuration time.Duration
 
 	Debug bool // autopaho and paho debug output requested
 
@@ -208,6 +211,20 @@ func GetConfigFromEnv() (*Config, error) {
 		}
 	}
 
+		throttleDurationString, _ := stringFromEnv(envThrottledQueueDuration)
+	if throttleDurationString == "" {
+		cfg.ThrottledQueueDuration = 30*time.Second
+	} else {
+		throttleDuration, err := time.ParseDuration(throttleDurationString)
+		if err != nil {
+			return nil, err
+		}
+		if throttleDuration < (time.Second * 5) {
+			return nil, fmt.Errorf("ThrottledQueueDuration must be at least 5 seconds")
+		}
+		cfg.ThrottledQueueDuration = throttleDuration
+	}
+
 	return &cfg, nil
 }
 
@@ -284,6 +301,20 @@ func GetConfigFromEnvWithoutTopic() (*Config, error) {
 	cfg.EnableGzip, err = booleanFromEnv(envEnableGzip)
 	if err != nil {
 		return nil, err
+	}
+
+	throttleDurationString, _ := stringFromEnv(envThrottledQueueDuration)
+	if throttleDurationString == "" {
+		cfg.ThrottledQueueDuration = 30*time.Second
+	} else {
+		throttleDuration, err := time.ParseDuration(throttleDurationString)
+		if err != nil {
+			return nil, err
+		}
+		if throttleDuration < (time.Second * 5) {
+			return nil, fmt.Errorf("ThrottledQueueDuration must be at least 5 seconds")
+		}
+		cfg.ThrottledQueueDuration = throttleDuration
 	}
 
 	return &cfg, nil

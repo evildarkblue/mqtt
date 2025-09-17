@@ -30,11 +30,11 @@ func (t *ThrottledQueue) Enqueue(p io.Reader) error {
 }
 
 func (t *ThrottledQueue) Wait() chan struct{} {
-	time.Sleep(t.delay)
 	return t.inner.Wait()
 }
 
 // New methods for manual control
 func (t *ThrottledQueue) Peek() (queue.Entry, error) {
+	time.Sleep(t.delay)
 	return t.inner.Peek()
 }
